@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket PDF Parser</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f5f7;--card:#fff;--ink:#16181d;--muted:#667085;--line:#e4e7ec;--head:#f8f9fb;
+    --brand:#4f46e5;--brand-ink:#fff;--brand-soft:#eef2ff;
+    --warn-bg:#fff4d6;--warn-line:#f2b400;--warn-ink:#7a5200;
+    --ok-soft:#e8f7ee;--ok-ink:#157347;--bad:#b42318;--shadow:0 1px 2px rgba(16,24,40,.06),0 4px 16px rgba(16,24,40,.05);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0f1115;--card:#171a21;--ink:#eceef3;--muted:#98a2b3;--line:#272b35;--head:#1c2029;
+    --brand:#8b8cff;--brand-ink:#0f1115;--brand-soft:#23254a;
+    --warn-bg:#3a2e08;--warn-line:#d9a400;--warn-ink:#ffd966;
+    --ok-soft:#12301f;--ok-ink:#6ee7a0;--bad:#ff8a80;--shadow:none;
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .page{max-width:1280px;margin:0 auto;padding:28px 20px 60px}
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:24px;margin:0;letter-spacing:-.01em}
+  .sub{margin:4px 0 0;color:var(--muted)}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--card);border:1px solid var(--line);color:var(--muted);font-size:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+  #drop{display:flex;flex-direction:column;align-items:center;gap:6px;padding:34px 20px;text-align:center;cursor:pointer;border:2px dashed var(--line);border-radius:14px;background:var(--card);transition:.15s}
+  #drop:hover,#drop.over{border-color:var(--brand);background:var(--brand-soft)}
+  #drop b{font-size:16px}#drop span{color:var(--muted)}
+  #drop svg{width:34px;height:34px;color:var(--brand)}
+  #progress{display:none;padding:16px 18px;margin-top:14px}
+  #progress .top{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font-weight:600}
+  #progress .top small{font-weight:400;color:var(--muted)}
+  .bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden}
+  .bar>div{height:100%;width:0;background:var(--brand);border-radius:6px;transition:width .25s}
+  #msg{margin:14px 0 0;color:var(--muted)}
+  #msg.err{color:var(--bad);font-weight:600}
+  #results{display:none;margin-top:16px}
+  .summary{display:flex;flex-wrap:wrap;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line);align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;background:var(--head);border:1px solid var(--line);font-weight:600}
+  .chip.ok{background:var(--ok-soft);color:var(--ok-ink);border-color:transparent}
+  .chip.warn{background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-line);cursor:pointer}
+  .grow{flex:1}
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .toolbar label{display:inline-flex;align-items:center;gap:6px;color:var(--muted);cursor:pointer;user-select:none}
+  button{font:inherit;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+  button:hover{border-color:var(--brand)}
+  button.primary{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}
+  button.primary:hover{filter:brightness(1.07)}
+  .wrap{overflow:auto;max-height:70vh}
+  table{border-collapse:separate;border-spacing:0;width:100%}
+  th,td{padding:9px 12px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--line)}
+  th{position:sticky;top:0;z-index:2;background:var(--head);font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  tbody tr:hover td{background:var(--brand-soft)}
+  td.n{color:var(--muted);width:1%}
+  td[contenteditable]{outline:none;cursor:text}
+  td[contenteditable]:focus{box-shadow:inset 0 0 0 2px var(--brand);background:var(--card)!important}
+  td[contenteditable]:empty::before{content:"\2014";color:var(--muted);opacity:.5}
+  td.flag{background:var(--warn-bg);box-shadow:inset 3px 0 0 var(--warn-line);color:var(--warn-ink);font-weight:600;cursor:pointer}
+  td.flag::after{content:" \26A0";font-size:12px}
+  .src{font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--head);border:1px solid var(--line);color:var(--muted)}
+  .src.axs{background:#e8f1ff;color:#1d4ed8;border-color:transparent}
+  .src.tm{background:#e6f6f0;color:#0f7a55;border-color:transparent}
+  @media (prefers-color-scheme:dark){.src.axs{background:#16294d;color:#8fb4ff}.src.tm{background:#12302a;color:#6ee7b7}}
+  .legend{padding:12px 16px;color:var(--muted);font-size:13px;display:flex;gap:16px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px;background:var(--warn-bg);box-shadow:inset 0 0 0 1px var(--warn-line)}
+  #pop{position:absolute;z-index:20;display:none;width:300px;padding:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.2)}
+  #pop h4{margin:0 0 4px;font-size:14px}#pop p{margin:0 0 10px;color:var(--muted);font-size:12.5px}
+  #pop .opt{display:block;width:100%;text-align:left;margin-top:6px;font-weight:500;word-break:break-all}
+  #pop .opt small{display:block;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase}
+  details{margin-top:18px;color:var(--muted)}
+  pre{background:#0d1117;color:#d0d7de;padding:12px;border-radius:10px;max-height:340px;overflow:auto;font-size:12px;white-space:pre-wrap}
+  @media (max-width:640px){.page{padding:18px 12px 40px}h1{font-size:20px}}
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <h1>Ticket Order Parser</h1>
+      <p class="sub">Turn Ticketmaster and AXS order emails (printed to PDF) into a spreadsheet-ready table.</p>
+    </div>
+    <span class="pill">&#128274; Runs in your browser. Nothing is uploaded.</span>
+  </header>
+
+  <label id="drop" for="file">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+    <b id="dropTitle">Drop your PDF here, or click to choose</b>
+    <span>Scanned or image-only pages are read with OCR automatically.</span>
+    <input id="file" type="file" accept="application/pdf" hidden>
+  </label>
+
+  <div id="progress" class="card">
+    <div class="top"><span id="stage">Reading PDF…</span><small id="count"></small></div>
+    <div class="bar"><div id="fill"></div></div>
+  </div>
+  <p id="msg"></p>
+
+  <section id="results" class="card">
+    <div class="summary" id="summary"></div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="onlyCheck"> Only show rows to check</label>
+      <label><input type="checkbox" id="withHeader"> Include header row when copying</label>
+      <span class="grow"></span>
+      <button id="csv">Download CSV</button>
+      <button id="copy" class="primary">Copy for Excel / Sheets</button>
+    </div>
+    <div class="wrap"><table id="tbl"></table></div>
+    <div class="legend">
+      <span><i></i>Amber cell: two OCR reads of the PDF disagreed. Click it to pick the right one.</span>
+      <span>Any cell can be edited by clicking it.</span>
+    </div>
+  </section>
+
+  <details><summary>Extracted text (for debugging)</summary><pre id="raw"></pre></details>
+</div>
+<div id="pop"></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const COLS = ["Date","Email","Password","Order ID","Event","Sections","Row","Seats","Quantity","Cards"];
+
+/* ================= PARSING ================= */
+const EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
+const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+const DASHY = "[-–—−.:;~=_|]";
+const isDash = s => !s || new RegExp("^" + DASHY + "*$").test(s);
+const uniq = a => [...new Set(a)];
+
+// Gmail message header: 'Sender <a@b.com> Wed, Oct 28, 2026 at 1:18 AM'
+const MSG_HDR = /^.*<[^<>\n]*@[^<>\n]*>\s*((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})\s+at\s+\d{1,2}:\d{2}\s*[AP]M/gim;
+const ORDER_RE = /ORDER\s*(?:#|NO\.?|NUMBER)?\s*[:#]?\s*(\d{1,3}\s*-\s*\d{3,}(?:\s*\/\s*[A-Za-z0-9]+)?|\d{6,})/i;
+const LABEL_RE = /Section\W+Row\W+Seat/gi;
+
+function cleanText(text) {
+  return text.replace(/\r/g, "").split("\n").filter(l => {
+    const s = l.trim();
+    if (/mail\.google\.com\/mail\/u\/\d/i.test(s)) return false;                     // page footer URL
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4},\s*\d{1,2}:\d{2}\s*[AP]M\b/i.test(s)) return false; // page header
+    return true;
+  }).join("\n");
+}
+
+function fmtDate(s) {
+  const m = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/.exec(s.replace(/^[A-Za-z]+,?\s+/, ""));
+  if (!m) return s;
+  const mi = MONTHS.indexOf(m[1].toLowerCase());
+  return mi < 0 ? s : `${mi + 1}/${+m[2]}/${m[3]}`;
+}
+
+const CONFUSE = { G: "6", S: "5", O: "0", I: "1", L: "1", B: "8", Z: "2" };
+function fixSection(s) {            // OCR often reads GA6 as GAG, GA5 as GAS, ...
+  const m = /^GA([A-Z0-9]{1,2})$/.exec(s);
+  if (!m) return s;
+  const d = [...m[1]].map(ch => /\d/.test(ch) ? ch : CONFUSE[ch]);
+  return d.every(Boolean) ? "GA" + d.join("") : s;
+}
+function dominant(list) {           // keep values that appear often; drops one-off OCR noise
+  const cnt = new Map();
+  list.forEach(v => cnt.set(v, (cnt.get(v) || 0) + 1));
+  const max = Math.max(0, ...cnt.values());
+  return [...cnt.entries()].filter(([, c]) => c >= max / 2).sort((a, b) => b[1] - a[1]).map(([v]) => v);
+}
+
+function parseTickets(block) {
+  const labels = [...block.matchAll(LABEL_RE)];
+  if (!labels.length) return { qty: 0, sections: [], rows: [], seats: [] };
+  let region = block.slice(labels[0].index);
+  const end = region.search(/PAYMENT SUMMARY|Payment Method|^\s*Total\b/im);
+  if (end > 0) region = region.slice(0, end);
+
+  const sections = [], rows = [], seats = [];
+  for (const raw of region.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const t = line.split(/\s+/);
+    // value line: SECTION [row] [seat], where row/seat are dashes or short codes
+    if (t.length > 3 || !/^[A-Z][A-Z0-9]{1,9}$|^\d{1,4}[A-Z]{0,2}$/.test(t[0])) continue;
+    if (/^(SECTION|ROW|SEAT|VISA|TOTAL)$/.test(t[0])) continue;
+    const rest = t.slice(1);
+    if (!rest.every(x => isDash(x) || /^[A-Z0-9]{1,4}(?:-\d+)?$/i.test(x))) continue;
+    sections.push(fixSection(t[0]));
+    if (rest[0] && !isDash(rest[0])) rows.push(rest[0]);
+    if (rest[1] && !isDash(rest[1])) seats.push(rest[1]);
+  }
+  return { qty: Math.max(labels.length, sections.length), sections: dominant(sections), rows: dominant(rows), seats: dominant(seats) };
+}
+
+function parseBlock(block, headDate, subject) {
+  const order = ORDER_RE.exec(block);
+  const orderId = order ? order[1].replace(/\s+/g, "") : "";
+
+  // recipient: the 'To:' line (not 'Reply-To:'); OCR may insert spaces inside the address
+  let email = "";
+  const to = /^\s*To\s*:\s*(.+)$/im.exec(block);
+  if (to) email = (EMAIL_RE.exec(to[1].replace(/\s+/g, "")) || [""])[0];
+  if (!email) {
+    const noSpace = block.split("\n").map(l => l.replace(/\s+/g, "")).join("\n");
+    email = (noSpace.match(new RegExp(EMAIL_RE.source, "g")) || [])
+      .find(e => !/ticketmaster|noreply|no-reply|donotreply|google\.com/i.test(e)) || "";
+  }
+
+  const ev = /^\s*(.{3,60}?:\s*LIVE\s*\d{4})\s*$/im.exec(block) || /\bEvent:\s*([^\n]{3,80})/i.exec(block);
+  const event = ev ? ev[1].trim() : (subject || "");
+
+  const tk = parseTickets(block);
+  const card = (/Payment\s*Method\D{0,4}(\d{4})\b/i.exec(block) || /\b(\d{4})\s*[|\[]?\s*(?:VISA|WSA|WISA|MASTERCARD|AMEX|DISCOVER)/i.exec(block) || [])[1] || "";
+
+  const qty = tk.qty || (/(\d{1,2})\s*tickets?\b/i.exec(block) || [])[1] || "";
+  return {
+    "Date": fmtDate(headDate || ""),
+    "Email": email,
+    "Password": "",
+    "Order ID": orderId,
+    "Event": event,
+    "Sections": tk.sections.join(", "),
+    "Row": tk.rows.join(", ") || (tk.qty ? "GA" : ""),
+    "Seats": tk.seats.join(", ") || (tk.qty ? "GA" : ""),
+    "Quantity": qty ? +qty : "",
+    "Cards": card,
+  };
+}
+
+/* ---- AXS 'Thank you for your order' emails ---- */
+const AXS_CONF_RE = /confirmation\s*number\s*(?:is)?\s*[:#]?\s*(\d{6,})/i;
+const GA_WORD = /\bGA\b|general|admission|standing|lawn|pit/i;
+
+function parseAxs(block, headDate, axsSubject) {
+  const conf = AXS_CONF_RE.exec(block);
+
+  let email = "";
+  const to = /^\s*To\s*:\s*(.+)$/im.exec(block);
+  if (to) email = (EMAIL_RE.exec(to[1].replace(/\s+/g, "")) || [""])[0];
+
+  // event: 'Order details for <event> at <venue> scheduled on ...', else the email subject
+  const od = /Order details for\s+(.+?)\s+at\s+.+?\s+scheduled on/i.exec(block);
+  let event = (od ? od[1] : axsSubject || "").trim();
+  event = event.replace(/\s*-\s*[^-]*\b(?:pre-?sale|on-?sale|fan\s*club|members?)\b[^-]*$/i, "").trim();
+
+  // ticket table: '<qty> <type>   <section>   [row]   [seats]   $price   $total'
+  const sections = [], rows = [], seats = [];
+  let qty = 0, found = false;
+  const tbl = /Quantity\s+Type[^\n]*\n([\s\S]*?)(?=Method of Delivery|Sub\s*Total|Grand\s*Total|$)/i.exec(block);
+  if (tbl) {
+    for (const line of tbl[1].split("\n")) {
+      const m = /^\s*(\d{1,3})\s+(.+?)\s+\$\s*[\d,]+\.\d\d\s+\$\s*[\d,]+\.\d\d\s*$/.exec(line);
+      if (!m) continue;
+      found = true;
+      qty += +m[1];
+      let parts = m[2].trim().split(/\s{2,}/);
+      if (parts.length === 1) parts = [parts[0].split(/\s+/)[0], parts[0].split(/\s+/).slice(1).join(" ")];
+      const [, sec = "", row = "", seat = ""] = parts;
+      if (sec) sections.push(sec);
+      if (row && !isDash(row)) rows.push(row);
+      if (seat && !isDash(seat)) seats.push(seat);
+    }
+  }
+  const gaLike = sections.some(x => GA_WORD.test(x));
+  const card = (/(?:card|visa|mastercard|amex)[^\n]{0,25}?(?:ending in|\*{2,}|x{2,})\s*(\d{4})\b/i.exec(block) || [])[1] || "";
+
+  return {
+    "Date": fmtDate(headDate || ""),
+    "Email": fixEmail(email),
+    "Password": "",
+    "Order ID": conf ? conf[1] : "",
+    "Event": event,
+    "Sections": uniq(sections).join(", "),
+    "Row": uniq(rows).join(", ") || (gaLike ? "GA" : ""),
+    "Seats": uniq(seats).join(", ") || (gaLike ? "GA" : ""),
+    "Quantity": found ? qty : "",
+    "Cards": card,
+  };
+}
+const isAxsBlock = t => /@axs\.com/i.test(t.split("\n").slice(0, 3).join("\n")) || AXS_CONF_RE.test(t);
+
+// emails from every message header ('To:' line), in order; used to cross-check a second OCR read
+function toEmails(rawText) {
+  const text = cleanText(rawText);
+  const hdrs = [...text.matchAll(MSG_HDR)];
+  return hdrs.map((m, i) => {
+    const blk = text.slice(m.index, i + 1 < hdrs.length ? hdrs[i + 1].index : text.length);
+    const to = /^\s*To\s*:\s*(.+)$/im.exec(blk);
+    return to ? fixEmail((EMAIL_RE.exec(to[1].replace(/\s+/g, "")) || [""])[0]) : "";
+  });
+}
+function fixEmail(e) {              // capital I between lowercase letters is nearly always a lowercase L
+  return e.replace(/([a-z])I(?=[a-z])/g, "$1l");
+}
+
+function parseText(rawText, altText) {
+  const subject = (/You got tickets to\s+(.+)$/im.exec(rawText) || [])[1]?.trim() || "";
+  const pageMarks = [...rawText.matchAll(/^=+\s*PAGE\s+(\d+)/gim)];   // used to tell the user which page to check
+  const axsSubject = (/Thank you for your order for\s+(.+?)\s*$/im.exec(rawText) || [])[1]?.trim() || "";
+  const text = cleanText(rawText);
+  const marks = [...text.matchAll(/^=+\s*PAGE\s+(\d+)/gim)].map(m => ({ i: m.index, p: +m[1] }));
+  const pageAt = idx => { let p = 1; for (const m of marks) { if (m.i <= idx) p = m.p; else break; } return p; };
+
+  // split into messages by Gmail header; fall back to splitting around each ORDER #
+  const hdrs = [...text.matchAll(MSG_HDR)];
+  let blocks = hdrs.map((m, i) => ({
+    date: m[1], page: pageAt(m.index),
+    text: text.slice(m.index, i + 1 < hdrs.length ? hdrs[i + 1].index : text.length),
+  }));
+  if (!blocks.some(b => ORDER_RE.test(b.text) || isAxsBlock(b.text))) {
+    const g = new RegExp(ORDER_RE.source, "ig");
+    const ms = [...text.matchAll(g)];
+    blocks = ms.map((m, i) => {
+      const start = Math.max(i ? ms[i - 1].index + 1 : 0, m.index - 600);
+      const end = i + 1 < ms.length ? Math.max(m.index + 1, ms[i + 1].index - 600) : text.length;
+      const t = text.slice(start, end);
+      return { page: pageAt(m.index), date: (/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}/.exec(t) || [""])[0], text: t };
+    });
+  }
+
+  const alt = altText ? toEmails(altText) : [];
+  const useAlt = alt.length === blocks.length;      // only compare when both reads found the same headers
+  const seen = new Set(), out = [];
+  for (const [bi, b] of blocks.entries()) {
+    const axs = isAxsBlock(b.text);
+    if (!axs && !ORDER_RE.test(b.text)) continue;   // not an order email
+    const row = axs ? parseAxs(b.text, b.date, axsSubject) : parseBlock(b.text, b.date, subject);
+    row["Email"] = fixEmail(row["Email"]);
+    Object.defineProperty(row, "_src", { value: axs ? "AXS" : "Ticketmaster", enumerable: false });
+    Object.defineProperty(row, "_page", { value: b.page || "", enumerable: false });
+    if (useAlt && alt[bi] && alt[bi] !== row["Email"]) {
+      Object.defineProperty(row, "_check", { value: { Email: alt[bi] }, enumerable: false });  // two OCR reads disagree
+    }
+    if (row["Order ID"] && seen.has(row["Order ID"])) continue;
+    seen.add(row["Order ID"]);
+    out.push(row);
+  }
+  return out;
+}
+
+/* ================= PDF -> TEXT (text layer, else OCR) ================= */
+async function pageTextLayer(page) {
+  const content = await page.getTextContent();
+  const lines = new Map();
+  for (const it of content.items) {
+    if (!it.str) continue;
+    const y = Math.round(it.transform[5] / 3);
+    if (!lines.has(y)) lines.set(y, []);
+    lines.get(y).push({ x: it.transform[4], s: it.str });
+  }
+  return [...lines.keys()].sort((a, b) => b - a)
+    .map(y => lines.get(y).sort((a, b) => a.x - b.x).map(i => i.s).join(" ").replace(/\s+/g, " ").trim())
+    .join("\n");
+}
+
+async function renderForOcr(page, plain) {
+  const vp = page.getViewport({ scale: plain ? 3.5 : 2.6 });   // ~250 dpi plain, ~190 dpi enhanced
+  const c = document.createElement("canvas");
+  c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  if (plain) return c;
+  // darken faint grey text (e.g. ticket sections) so OCR can read it; white stays white
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const l = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const v = l < 225 ? l * 0.35 : 255;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+async function extractText(buf, onProgress) {
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const n = pdf.numPages, texts = new Array(n).fill("");
+  const needOcr = [];
+  let done = 0;
+
+  for (let p = 1; p <= n; p++) {
+    const page = await pdf.getPage(p);
+    const t = await pageTextLayer(page);
+    if (t.replace(/\s/g, "").length >= 30) { texts[p - 1] = t; done++; } else needOcr.push(p);
+  }
+  if (!needOcr.length) return { text: joinPages(texts), altText: "" };
+
+  onProgress(done, n, "No text layer found, running OCR (first run downloads the language data)…");
+  const nWorkers = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1, needOcr.length));
+  const workers = await Promise.all(Array.from({ length: nWorkers }, () => Tesseract.createWorker("eng")));
+  for (const w of workers) await w.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.SINGLE_COLUMN, preserve_interword_spaces: "1" });
+
+  const runPool = async (pages, plain, store, tick) => {
+    let next = 0;
+    await Promise.all(workers.map(async w => {
+      while (next < pages.length) {
+        const p = pages[next++];
+        const canvas = await renderForOcr(await pdf.getPage(p), plain);
+        const { data } = await w.recognize(canvas);
+        store[p - 1] = data.text;
+        canvas.width = canvas.height = 0;
+        tick();
+      }
+    }));
+  };
+
+  await runPool(needOcr, false, texts, () => onProgress(++done, n, "OCR in progress…"));
+
+  // second, plain high-resolution read of the pages that hold email headers, to cross-check addresses
+  const hdrPages = needOcr.filter(p => /^\s*(To\s*:|Reply-?To)/im.test(texts[p - 1]));
+  const alt = new Array(n).fill("");
+  let d2 = 0;
+  await runPool(hdrPages, true, alt, () => onProgress(n, n, `Double-checking email addresses ${++d2}/${hdrPages.length}…`));
+
+  await Promise.all(workers.map(w => w.terminate()));
+  return { text: joinPages(texts), altText: joinPages(alt) };
+}
+const joinPages = t => t.map((x, i) => `===== PAGE ${i + 1} =====\n${x}`).join("\n");
+
+/* ================= UI ================= */
+let rows = [];
+const $ = id => document.getElementById(id);
+const flagsOf = r => Object.keys(r._check || {});
+const needsCheck = r => flagsOf(r).length > 0;
+const missing = r => r["Sections"] === "" || r["Quantity"] === "";
+
+function setMsg(text, err) { $("msg").textContent = text || ""; $("msg").className = err ? "err" : ""; }
+
+function renderSummary() {
+  const n = rows.length, tm = rows.filter(r => r._src === "Ticketmaster").length, ax = rows.filter(r => r._src === "AXS").length;
+  const chk = rows.filter(needsCheck).length, miss = rows.filter(missing).length;
+  const bits = [`<span class="chip">${n} order${n === 1 ? "" : "s"}</span>`];
+  if (tm) bits.push(`<span class="chip">${tm} Ticketmaster</span>`);
+  if (ax) bits.push(`<span class="chip">${ax} AXS</span>`);
+  bits.push(chk ? `<span class="chip warn" id="chkChip" title="Show only these rows">&#9888; ${chk} to check</span>` : `<span class="chip ok">&#10003; Nothing to check</span>`);
+  if (miss) bits.push(`<span class="chip" title="No ticket details in the PDF for these (usually collapsed emails)">${miss} missing ticket details</span>`);
+  $("summary").innerHTML = bits.join("");
+  const c = $("chkChip"); if (c) c.onclick = () => { $("onlyCheck").checked = true; render(); };
+}
+
+function render() {
+  closePop();
+  renderSummary();
+  const only = $("onlyCheck").checked;
+  const t = $("tbl");
+  t.innerHTML = "<thead><tr><th>#</th><th>Source</th>" + COLS.map(c => `<th>${c}</th>`).join("") + "</tr></thead>";
+  const tb = document.createElement("tbody");
+  rows.forEach((r, i) => {
+    if (only && !needsCheck(r)) return;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="n">${i + 1}</td><td><span class="src ${r._src === "AXS" ? "axs" : "tm"}">${r._src === "AXS" ? "AXS" : "TM"}</span></td>`;
+    COLS.forEach(c => {
+      const td = document.createElement("td");
+      td.textContent = r[c];
+      if (r._check && r._check[c]) {
+        td.className = "flag";
+        td.title = "Click to choose between two readings";
+        td.onclick = e => openPop(td, r, c);
+      } else {
+        td.contentEditable = true;
+        td.oninput = () => { r[c] = td.textContent.trim(); };
+      }
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  $("results").style.display = rows.length ? "block" : "none";
+}
+
+/* popover for cells where two OCR reads disagree */
+function openPop(td, r, c) {
+  const other = r._check[c], cur = r[c], pop = $("pop");
+  pop.innerHTML = `<h4>Two readings of this ${c.toLowerCase()}</h4>
+    <p>The OCR read this differently the second time${r._page ? ` (header is on PDF page ${r._page})` : ""}. Compare with the PDF and pick the correct one, or type your own.</p>
+    <button class="opt" data-v="${encodeURIComponent(cur)}"><small>Reading 1 (current)</small>${esc(cur)}</button>
+    <button class="opt" data-v="${encodeURIComponent(other)}"><small>Reading 2</small>${esc(other)}</button>
+    <input id="own" placeholder="Or type the correct value" style="width:100%;margin-top:8px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit">`;
+  pop.querySelectorAll(".opt").forEach(b => b.onclick = () => choose(r, c, decodeURIComponent(b.dataset.v)));
+  $("own").onkeydown = e => { if (e.key === "Enter" && e.target.value.trim()) choose(r, c, e.target.value.trim()); };
+  const rect = td.getBoundingClientRect();
+  pop.style.display = "block";
+  pop.style.left = Math.max(8, Math.min(window.scrollX + rect.left, window.scrollX + innerWidth - 316)) + "px";
+  pop.style.top = (window.scrollY + rect.bottom + 6) + "px";
+  setTimeout(() => $("own").focus(), 0);
+}
+const esc = v => String(v).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+function choose(r, c, v) { r[c] = v; delete r._check[c]; render(); }
+function closePop() { $("pop").style.display = "none"; }
+document.addEventListener("mousedown", e => { if (!e.target.closest("#pop") && !e.target.closest("td.flag")) closePop(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+
+async function handle(file) {
+  if (!file) return;
+  rows = []; render(); $("raw").textContent = ""; setMsg("");
+  const prog = $("progress"), fill = $("fill"), t0 = Date.now();
+  prog.style.display = "block"; fill.style.width = "0"; $("stage").textContent = "Reading PDF…"; $("count").textContent = "";
+  $("dropTitle").textContent = file.name;
+  try {
+    const { text, altText } = await extractText(await file.arrayBuffer(), (done, n, msg) => {
+      fill.style.width = (100 * done / n) + "%";
+      $("stage").textContent = msg || "Reading PDF…";
+      $("count").textContent = `${done} / ${n} pages · ${Math.round((Date.now() - t0) / 1000)}s`;
+    });
+    $("raw").textContent = text;
+    rows = parseText(text, altText);
+    render();
+    if (!rows.length) setMsg('No orders found. Open "Extracted text" at the bottom to see what was read from the PDF.', true);
+  } catch (e) {
+    setMsg("Could not read this PDF: " + e.message, true);
+  } finally {
+    prog.style.display = "none";
+  }
+}
+
+const drop = $("drop"), input = $("file");
+input.onchange = () => { handle(input.files[0]); input.value = ""; };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handle(e.dataTransfer.files[0]); };
+$("onlyCheck").onchange = render;
+
+$("copy").onclick = async () => {
+  const lines = rows.map(r => COLS.map(c => String(r[c]).replace(/\t|\n/g, " ")).join("\t"));
+  if ($("withHeader").checked) lines.unshift(COLS.join("\t"));
+  await navigator.clipboard.writeText(lines.join("\n"));
+  const b = $("copy"), old = b.textContent; b.textContent = "Copied ✓"; setTimeout(() => b.textContent = old, 1500);
+};
+$("csv").onclick = () => {
+  const q = v => `"${String(v).replace(/"/g, '""')}"`;
+  const csv = [COLS.map(q).join(","), ...rows.map(r => COLS.map(c => q(r[c])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "tickets.csv"; a.click();
+};
+</script>
+</body>
+</html>

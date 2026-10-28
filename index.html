@@ -56,6 +56,7 @@
   th{position:sticky;top:0;z-index:2;background:var(--head);font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
   tbody tr:hover td{background:var(--brand-soft)}
   td.n{color:var(--muted);width:1%}
+  td.file{color:var(--muted);font-size:12.5px}
   td[contenteditable]{outline:none;cursor:text}
   td[contenteditable]:focus{box-shadow:inset 0 0 0 2px var(--brand);background:var(--card)!important}
   td[contenteditable]:empty::before{content:"\2014";color:var(--muted);opacity:.5}
@@ -88,9 +89,9 @@
 
   <label id="drop" for="file">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-    <b id="dropTitle">Drop your PDF here, or click to choose</b>
-    <span>Scanned or image-only pages are read with OCR automatically.</span>
-    <input id="file" type="file" accept="application/pdf" hidden>
+    <b id="dropTitle">Drop your PDFs here, or click to choose</b>
+    <span>You can select several PDFs at once. Scanned or image-only pages are read with OCR automatically.</span>
+    <input id="file" type="file" accept="application/pdf" multiple hidden>
   </label>
 
   <div id="progress" class="card">
@@ -441,12 +442,14 @@ function render() {
   renderSummary();
   const only = $("onlyCheck").checked;
   const t = $("tbl");
-  t.innerHTML = "<thead><tr><th>#</th><th>Source</th>" + COLS.map(c => `<th>${c}</th>`).join("") + "</tr></thead>";
+  const multi = new Set(rows.map(r => r._file)).size > 1;
+  t.innerHTML = "<thead><tr><th>#</th><th>Source</th>" + (multi ? "<th>File</th>" : "") + COLS.map(c => `<th>${c}</th>`).join("") + "</tr></thead>";
   const tb = document.createElement("tbody");
   rows.forEach((r, i) => {
     if (only && !needsCheck(r)) return;
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="n">${i + 1}</td><td><span class="src ${r._src === "AXS" ? "axs" : "tm"}">${r._src === "AXS" ? "AXS" : "TM"}</span></td>`;
+    tr.innerHTML = `<td class="n">${i + 1}</td><td><span class="src ${r._src === "AXS" ? "axs" : "tm"}">${r._src === "AXS" ? "AXS" : "TM"}</span></td>`
+      + (multi ? `<td class="file" title="${esc(r._file || "")}">${esc(shortName(r._file || ""))}</td>` : "");
     COLS.forEach(c => {
       const td = document.createElement("td");
       td.textContent = r[c];
@@ -470,7 +473,7 @@ function render() {
 function openPop(td, r, c) {
   const other = r._check[c], cur = r[c], pop = $("pop");
   pop.innerHTML = `<h4>Two readings of this ${c.toLowerCase()}</h4>
-    <p>The OCR read this differently the second time${r._page ? ` (header is on PDF page ${r._page})` : ""}. Compare with the PDF and pick the correct one, or type your own.</p>
+    <p>The OCR read this differently the second time${r._page ? ` (header is on page ${r._page}${r._file ? " of " + esc(r._file) : ""})` : ""}. Compare with the PDF and pick the correct one, or type your own.</p>
     <button class="opt" data-v="${encodeURIComponent(cur)}"><small>Reading 1 (current)</small>${esc(cur)}</button>
     <button class="opt" data-v="${encodeURIComponent(other)}"><small>Reading 2</small>${esc(other)}</button>
     <input id="own" placeholder="Or type the correct value" style="width:100%;margin-top:8px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit">`;
@@ -482,40 +485,58 @@ function openPop(td, r, c) {
   pop.style.top = (window.scrollY + rect.bottom + 6) + "px";
   setTimeout(() => $("own").focus(), 0);
 }
+const shortName = n => n.length > 26 ? n.slice(0, 18) + "…" + n.slice(-7) : n;
 const esc = v => String(v).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 function choose(r, c, v) { r[c] = v; delete r._check[c]; render(); }
 function closePop() { $("pop").style.display = "none"; }
 document.addEventListener("mousedown", e => { if (!e.target.closest("#pop") && !e.target.closest("td.flag")) closePop(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
 
-async function handle(file) {
-  if (!file) return;
-  rows = []; render(); $("raw").textContent = ""; setMsg("");
-  const prog = $("progress"), fill = $("fill"), t0 = Date.now();
-  prog.style.display = "block"; fill.style.width = "0"; $("stage").textContent = "Reading PDF…"; $("count").textContent = "";
-  $("dropTitle").textContent = file.name;
-  try {
-    const { text, altText } = await extractText(await file.arrayBuffer(), (done, n, msg) => {
-      fill.style.width = (100 * done / n) + "%";
-      $("stage").textContent = msg || "Reading PDF…";
-      $("count").textContent = `${done} / ${n} pages · ${Math.round((Date.now() - t0) / 1000)}s`;
-    });
-    $("raw").textContent = text;
-    rows = parseText(text, altText);
-    render();
-    if (!rows.length) setMsg('No orders found. Open "Extracted text" at the bottom to see what was read from the PDF.', true);
-  } catch (e) {
-    setMsg("Could not read this PDF: " + e.message, true);
-  } finally {
-    prog.style.display = "none";
+const hasDetails = r => r["Sections"] !== "" && r["Quantity"] !== "";
+function addRows(list, incoming) {   // same order seen in two PDFs: keep one, preferring the one with ticket details
+  for (const r of incoming) {
+    const i = r["Order ID"] ? list.findIndex(x => x["Order ID"] === r["Order ID"] && x._src === r._src) : -1;
+    if (i < 0) list.push(r);
+    else if (!hasDetails(list[i]) && hasDetails(r)) list[i] = r;
   }
 }
 
+async function handle(fileList) {
+  const files = [...fileList].filter(f => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
+  if (!files.length) { if (fileList.length) setMsg("Those aren't PDF files.", true); return; }
+  rows = []; render(); $("raw").textContent = ""; setMsg("");
+  const prog = $("progress"), fill = $("fill"), t0 = Date.now(), problems = [];
+  prog.style.display = "block"; fill.style.width = "0"; $("stage").textContent = "Reading PDF…"; $("count").textContent = "";
+  $("dropTitle").textContent = files.length === 1 ? files[0].name : `${files.length} PDFs selected`;
+  const raws = [];
+  for (const [fi, file] of files.entries()) {
+    const label = files.length > 1 ? `File ${fi + 1} of ${files.length} (${shortName(file.name)}): ` : "";
+    try {
+      const { text, altText } = await extractText(await file.arrayBuffer(), (done, n, msg) => {
+        fill.style.width = (100 * (fi + done / n) / files.length) + "%";
+        $("stage").textContent = label + (msg || "Reading PDF…");
+        $("count").textContent = `${done} / ${n} pages · ${Math.round((Date.now() - t0) / 1000)}s`;
+      });
+      raws.push(`########## FILE: ${file.name}\n${text}`);
+      const found = parseText(text, altText);
+      found.forEach(r => Object.defineProperty(r, "_file", { value: file.name, enumerable: false }));
+      addRows(rows, found);
+      render();                                  // show results as each file finishes
+    } catch (e) {
+      problems.push(`${file.name}: ${e.message}`);
+    }
+  }
+  $("raw").textContent = raws.join("\n\n");
+  prog.style.display = "none";
+  if (problems.length) setMsg("Could not read: " + problems.join("; "), true);
+  else if (!rows.length) setMsg('No orders found. Open "Extracted text" at the bottom to see what was read from the PDF.', true);
+}
+
 const drop = $("drop"), input = $("file");
-input.onchange = () => { handle(input.files[0]); input.value = ""; };
+input.onchange = () => { handle(input.files); input.value = ""; };
 drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handle(e.dataTransfer.files[0]); };
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); handle(e.dataTransfer.files); };
 $("onlyCheck").onchange = render;
 
 $("copy").onclick = async () => {
